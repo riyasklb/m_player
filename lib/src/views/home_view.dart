@@ -61,7 +61,7 @@ class HomeView extends StatelessWidget {
                               ),
                             ),
                             AnimatedContainer(
-                              duration: const Duration(seconds: 1),
+                              duration: const Duration(seconds:  1),
                               height: 100,
                               width: state.position != null
                                   ? size.width *

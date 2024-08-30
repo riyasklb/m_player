@@ -1,3 +1,4 @@
+
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:just_waveform/just_waveform.dart';
 import 'package:audioplayers/audioplayers.dart';
@@ -5,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-// BLoC States
+
 abstract class AudioPlayerState {}
 
 class AudioPlayerInitial extends AudioPlayerState {}
@@ -32,7 +33,6 @@ class AudioPlayerError extends AudioPlayerState {
   AudioPlayerError(this.message);
 }
 
-// BLoC Events
 abstract class AudioPlayerEvent {}
 
 class LoadAudio extends AudioPlayerEvent {}
@@ -45,9 +45,8 @@ class UpdatePosition extends AudioPlayerEvent {
   UpdatePosition(this.position);
 }
 
-// BLoC Class
 class AudioPlayerBloc extends Bloc<AudioPlayerEvent, AudioPlayerState> {
-  late AudioPlayer _player;
+  late final AudioPlayer _player;
   Waveform? _waveform;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
@@ -62,16 +61,18 @@ class AudioPlayerBloc extends Bloc<AudioPlayerEvent, AudioPlayerState> {
     on<LoadAudio>(_onLoadAudio);
     on<TogglePlayPause>(_onTogglePlayPause);
     on<UpdatePosition>(_onUpdatePosition);
+
+    _initStreams();
   }
 
   Future<void> _onLoadAudio(LoadAudio event, Emitter<AudioPlayerState> emit) async {
     emit(AudioPlayerLoading());
 
     try {
-      String filePath = await _getData();
-      await _getWaveData(filePath);
+      final filePath = await _downloadAndCacheAudio();
+      _waveform = await _extractWaveform(filePath);
       await _player.setSource(DeviceFileSource(filePath));
-      _initStreams();
+      _duration = (await _player.getDuration())!;
       emit(AudioPlayerLoaded(
         waveform: _waveform!,
         duration: _duration,
@@ -79,7 +80,7 @@ class AudioPlayerBloc extends Bloc<AudioPlayerEvent, AudioPlayerState> {
         playerState: _playerState,
       ));
     } catch (e) {
-      emit(AudioPlayerError(e.toString()));
+      emit(AudioPlayerError('Failed to load audio: $e'));
     }
   }
 
@@ -108,42 +109,39 @@ class AudioPlayerBloc extends Bloc<AudioPlayerEvent, AudioPlayerState> {
     ));
   }
 
-  Future<String> _getData() async {
-    String url = "https://codeskulptor-demos.commondatastorage.googleapis.com/descent/background%20music.mp3";
-    String path = "";
-    try {
-      var response = await http.get(Uri.parse(url));
+  Future<String> _downloadAndCacheAudio() async {
+    final url = "https://codeskulptor-demos.commondatastorage.googleapis.com/descent/background%20music.mp3";
+    final tempDir = await getTemporaryDirectory();
+    final file = File('${tempDir.path}/audio.mp3');
 
+    if (!file.existsSync()) {
+      final response = await http.get(Uri.parse(url));
       if (response.statusCode == 200) {
-        var bytes = response.bodyBytes;
-
-        final tempDir = await getTemporaryDirectory();
-        File file = await File('${tempDir.path}/audio.mp3').create();
-        await file.writeAsBytes(bytes);
-
-        path = file.path;
+        await file.writeAsBytes(response.bodyBytes);
       } else {
         throw Exception("Failed to download file. Status code: ${response.statusCode}");
       }
-    } catch (e) {
-      throw Exception("Error occurred: $e");
     }
-    return path;
+
+    return file.path;
   }
 
-  Future<void> _getWaveData(String path) async {
+  Future<Waveform> _extractWaveform(String path) async {
     final tempDir = await getTemporaryDirectory();
-    File file = await File('${tempDir.path}/waveform.wave').create();
+    final waveFile = File('${tempDir.path}/waveform.wave');
     final progressStream = JustWaveform.extract(
       audioInFile: File(path),
-      waveOutFile: file,
+      waveOutFile: waveFile,
       zoom: const WaveformZoom.pixelsPerSecond(100),
     );
-    await for (var waveformProgress in progressStream) {
-      if (waveformProgress.waveform != null) {
-        _waveform = waveformProgress.waveform;
+
+    await for (var progress in progressStream) {
+      if (progress.waveform != null) {
+        return progress.waveform!;
       }
     }
+
+    throw Exception('Failed to extract waveform');
   }
 
   void _initStreams() {
@@ -153,7 +151,7 @@ class AudioPlayerBloc extends Bloc<AudioPlayerEvent, AudioPlayerState> {
 
     _playerStateChangeSubscription = _player.onPlayerStateChanged.listen((state) {
       _playerState = state;
-      add(UpdatePosition(_position));  // To trigger a UI update
+      add(UpdatePosition(_position));
     });
   }
 
